@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Grok 이미지/영상 생성</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 800px; margin: 40px auto; padding: 0 16px; }
+    .row { margin-bottom: 16px; }
+    button { padding: 10px 16px; border: 0; border-radius: 10px; cursor: pointer; }
+    #result img, #result video { max-width: 100%; display: block; margin-top: 16px; border-radius: 12px; }
+    .muted { color: #666; font-size: 14px; }
+    .preview { max-width: 240px; margin-top: 8px; border-radius: 8px; }
+    .tabs { display:flex; gap:8px; margin-bottom:12px; }
+    .tab { padding:8px 12px; border-radius:10px; border:1px solid #ddd; cursor:pointer; }
+    .tab.active { background:#111; color:#fff; border-color:#111; }
+  </style>
+</head>
+<body>
+  <h1>Grok 이미지/영상 생성</h1>
+
+  <div class="tabs">
+    <div class="tab active" data-mode="image">이미지 생성</div>
+    <div class="tab" data-mode="video">영상 생성(이미지→영상)</div>
+  </div>
+
+  <div class="row">
+    <label>프롬프트</label><br/>
+    <textarea id="prompt" rows="4" style="width:100%;" placeholder="원하는 장면을 자세히 적어주세요. 예) 햇살 들어오는 주방에서 팬케이크 굽는 고양이, 따뜻한 색감"></textarea>
+  </div>
+
+  <div class="row">
+    <label>참고 이미지 (선택)</label><br/>
+    <input id="image" type="file" accept="image/*" />
+    <div id="preview"></div>
+    <div class="muted">
+      이미지 첨부는 ‘영상(이미지→영상)’ 모드에서만 사용됩니다. 이미지 생성은 현재 텍스트 프롬프트만 지원합니다.
+    </div>
+  </div>
+
+  <div class="row">
+    <button id="gen">생성하기</button>
+    <span id="status" class="muted"></span>
+  </div>
+
+  <div id="result"></div>
+
+  <script>
+    // ⬇⬇⬇ Cloud Run 배포 후 이 주소만 바꿔주면 됩니다.
+    const CLOUD_RUN_URL = "https://YOUR-CLOUD-RUN-URL/generate";
+    // ⬆⬆⬆
+
+    const $prompt = document.getElementById('prompt');
+    const $image = document.getElementById('image');
+    const $preview = document.getElementById('preview');
+    const $btn = document.getElementById('gen');
+    const $status = document.getElementById('status');
+    const $result = document.getElementById('result');
+    const $tabs = document.querySelectorAll('.tab');
+    let mode = 'image';
+
+    $tabs.forEach(t => t.addEventListener('click', () => {
+      $tabs.forEach(x => x.classList.remove('active'));
+      t.classList.add('active');
+      mode = t.dataset.mode; // image | video
+    }));
+
+    $image.addEventListener('change', async () => {
+      $preview.innerHTML = '';
+      const f = $image.files?.[0];
+      if (!f) return;
+      const url = URL.createObjectURL(f);
+      const img = document.createElement('img');
+      img.src = url;
+      img.className = 'preview';
+      $preview.appendChild(img);
+    });
+
+    async function fileToBase64(file) {
+      const buf = await file.arrayBuffer();
+      const bytes = new Uint8Array(buf);
+      let binary = '';
+      for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+      return btoa(binary);
+    }
+
+    $btn.addEventListener('click', async () => {
+      $status.textContent = '생성 중...';
+      $result.innerHTML = '';
+      $btn.disabled = true;
+
+      try {
+        let imagePayload = null;
+        const f = $image.files?.[0];
+        if (f) {
+          imagePayload = { mime: f.type, base64: await fileToBase64(f) };
+        }
+
+        const payload = {
+          mode, // 'image' | 'video'
+          prompt: $prompt.value || '',
+          image: imagePayload
+        };
+
+        const res = await fetch(CLOUD_RUN_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+
+        const json = await res.json();
+
+        if (!res.ok || json.error) throw new Error(json.error || `HTTP ${res.status}`);
+
+        if (json.image_base64 && json.image_mime?.startsWith('image/')) {
+          const img = document.createElement('img');
+          img.src = `data:${json.image_mime};base64,${json.image_base64}`;
+          $result.appendChild(img);
+        } else if (json.video_base64 && json.video_mime?.startsWith('video/')) {
+          const video = document.createElement('video');
+          video.controls = true;
+          video.src = `data:${json.video_mime};base64,${json.video_base64}`;
+          $result.appendChild(video);
+        } else if (json.url) {
+          const a = document.createElement('a');
+          a.href = json.url;
+          a.textContent = '결과 보기';
+          a.target = '_blank';
+          $result.appendChild(a);
+        } else {
+          $result.textContent = '생성 완료했지만 표시할 미디어가 없어요.';
+        }
+
+        $status.textContent = '완료!';
+      } catch (err) {
+        console.error(err);
+        $status.textContent = '에러 발생';
+        $result.textContent = String(err?.message || err);
+      } finally {
+        $btn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
